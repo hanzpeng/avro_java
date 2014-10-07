@@ -1,0 +1,1 @@
+{"type":"record","name":"Thermostat.Types.Avro.TemperatureSettingChanged","fields":[{"name":"DeviceId","type":"int"},{"name":"Temperature","type":"float"},{"name":"TimeInTicks","type":"long"},{"name":"Filler","type":"string"}]}

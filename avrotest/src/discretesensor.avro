@@ -1,0 +1,12 @@
+{"namespace": "Contoso.Cars.Messages",
+"type": "record",
+"name": "DiscreteSensor",
+"fields": [
+{"name": "SensorSetEventType", "type": "string"},
+{"name": "LowFuel", "type": "boolean"},
+{"name": "DoorAjar", "type": "boolean"},
+{"name": "EngineRunning", "type": "boolean"},
+{"name": "LowOilPressure", "type": "boolean"},
+{"name": "DoorLocked", "type": "boolean"}
+]
+}

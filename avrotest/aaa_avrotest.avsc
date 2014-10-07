@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "AvroTests.MyDataType",
+  "fields": [
+    {
+      "name": "SomeNumber",
+      "type": "int"
+    },
+    {
+      "name": "SomeString",
+      "type": "string"
+    }
+  ]
+}
