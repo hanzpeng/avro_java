@@ -1,0 +1,206 @@
+######################################################################
+######################################################################
+follow this:
+http://thornydev.blogspot.com/2013/07/querying-json-records-via-hive.html
+
+1. create a azure blob wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/a1.txt as the followig:
+
+{"messagetype":"a","message":{"temp":"71","humidity":"91"},"rooms":[{"roomtype":"bath"},{"roomtype":"living"},{"roomtype":"bed"}]}
+{"messagetype":"a","message":{"temp":"72","humidity":"92"},"rooms":[{"roomtype":"living"},{"roomtype":"bed"}]}
+{"messagetype":"b","message":{"name":"Alex", "age":"18", "sex":"male" }}
+{"messagetype":"b","message":{"name":"Brian", "age":"19", "sex":"male" }}
+{"messagetype":"b","message":{"name":"Christy", "age":"20", "sex":"female"}}
+
+2. connect to hive console and run the following:
+
+option a. use get_json_object
+
+CREATE EXTERNAL TABLE json_table (json string) LOCATION 'wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/' ;
+
+select get_json_object(json_table.json, '$.message.temp') as temp,
+       get_json_object(json_table.json, '$.message.humidity') as humidity,
+       get_json_object(json_table.json, '$.rooms[0].roomtype') as roomtype
+from json_table
+where get_json_object(json_table.json, '$.messagetype')="a"
+
+select get_json_object(json_table.json, '$') from json_table; 
+
+option b. use lateral view json_tuple
+
+select b.*, a.rooms
+from json_table 
+lateral view json_tuple(json_table.json, 'messagetype', 'message', 'rooms') a 
+as type, msg, rooms
+lateral view json_tuple(a.msg, 'temp', 'humidity') b
+as temp, humidity
+where type='a';
+
+
+option c. use hive-json serde
+
+c-1: build json-serde-1.3-jar-with-dependencies.jar and upload it to azure storage:
+
+* clone the source from https://github.com/rcongiu/Hive-JSON-Serde
+
+* modify testSerializeWithMapping in JsonSerDeTest.fava
+
+assertEquals("{\"timestamp\":7898,\"two\":43.2,\"one\":true,\"three\":[],\"four\":\"value1\"}", obj.toString());
+assertEquals("{\"four\":\"value1\",\"one\":true,\"two\":43.2,\"three\":[],\"timestamp\":7898}", obj.toString());
+
+* run mvn build:
+mvn -Pcdh5 clean package
+
+this should create json-serde/target/json-serde-1.3-jar-with-dependencies.jar
+
+*Upload the above jar files to hdinsight storage container as:
+
+user/hdp/share/lib/hive/json-serde-1.3-jar-with-dependencies.jar
+
+c-2: register the jar file to hive:
+
+Start Hive CLI and run:
+
+ADD JAR wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/user/hdp/share/lib/hive/json-serde-1.3-jar-with-dependencies.jar
+
+c-3: modify the text of wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/a1.txt to the following:
+
+{"Foo": "ABC","Bar": "20090101100000","Quux": {"QuuxId": 1234,"QuuxName": "Sam"}}
+{"Foo": "FooValue","Bar": "BarValue","Quux": {"QuuxId": 1108,"QuuxName": "Hanz"}}
+
+* Run hive query: 
+
+CREATE EXTERNAL TABLE json_serde (
+  Foo string,
+  Bar string,
+  Quux struct<QuuxId:int, QuuxName:string>
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe' 
+LOCATION 'wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/' ;
+
+SELECT Foo, Bar, Quux.QuuxId, Quux.QuuxName FROM json_serde;
+
+c-4: More complex:
+
+* modify the text of wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/a1.txt to the following:
+{"DocId":"ABC","User":{"Id":1234,"Username":"sam1234","Name":"Sam","ShippingAddress":{"Address1":"123 Main St.","Address2":"","City":"Durham","State":"NC"},"Orders":[{"ItemId":6789,"OrderDate":"11/11/2012"},{"ItemId":4352,"OrderDate":"12/12/2012"}]}}
+
+* expended:
+{
+  "DocId": "ABC",
+  "User": {
+    "Id": 1234,
+    "Username": "sam1234",
+    "Name": "Sam",
+    "ShippingAddress": {
+      "Address1": "123 Main St.",
+      "Address2": null,
+      "City": "Durham",
+      "State": "NC"
+    },
+    "Orders": [
+      {
+        "ItemId": 6789,
+        "OrderDate": "11/11/2012"
+      },
+      {
+        "ItemId": 4352,
+        "OrderDate": "12/12/2012"
+      }
+    ]
+  }
+}
+
+*run query:
+
+CREATE EXTERNAL TABLE complex_json (
+  DocId string,
+  User struct<Id:int,
+              Username:string,
+              Name: string,
+              ShippingAddress:struct<Address1:string,
+                                     Address2:string,
+                                     City:string,
+                                     State:string>,
+              Orders:array<struct<ItemId:int,
+                                  OrderDate:string>>>
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 'wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/' ;
+
+SELECT DocId, User.Id, User.ShippingAddress.City as city,
+       User.Orders[0].ItemId as order0id,
+       User.Orders[1].ItemId as order1id
+FROM complex_json;
+
+SELECT DocId, User.Id, User.Orders.ItemId FROM complex_json;
+
+c-5: More complex:
+{"DocId":"ABC","User":{"Id":1235,"Username":"fred1235","Name":"Fred","ShippingAddress":{"Address1":"456 Main St.","Address2":"","City":"Durham","State":"NC"}}}
+{"DocId":"ABC","User":{"Id":1236,"Username":"larry1234","Name":"Larry","ShippingAddress":{"Address1":"789 Main St.","Address2":"","City":"Durham","State":"NC","PostalCode":"27713"},"Orders":[{"ItemId":1111,"OrderDate":"11/11/2012"},{"ItemId":2222,"OrderDate":"12/12/2012"}]}}
+
+SELECT DocId, User.Id, User.Orders.ItemId FROM complex_json;
+
+c-6: orignal data
+
+{"messagetype":"a","message":{"temp":71,"humidity":91},"rooms":[{"roomtype":"bath"},{"roomtype":"living"},{"roomtype":"bed"}]}
+{"messagetype":"a","message":{"temp":72,"humidity":92},"rooms":[{"roomtype":"living"},{"roomtype":"bed"}]}
+{"messagetype":"b","message":{"name":"Alex", "age":18, "sex":"male" }}
+{"messagetype":"b","message":{"name":"Brian", "age":19, "sex":"male" }}
+{"messagetype":"b","message":{"name":"Christy", "age":20, "sex":"female"}}
+
+CREATE EXTERNAL TABLE complex_json(
+  messagetype string,
+  message struct<temp:int,
+              humidity:int,
+              name: string,
+              age: int,
+              sex: string,
+              rooms:array<struct<roomtype:string>>>
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 'wasb://hanzhdi-1@hanzstorage.blob.core.windows.net/aaa/' ;
+
+
+
+SELECT message.temp, message.humidity FROM complex_json where messagetype="a";
+
+
+
+######################################################################
+######################################################################
+DROP TABLE IF EXISTS car_data;
+CREATE EXTERNAL TABLE IF NOT EXISTS car_data(vin string, ts string, message_type string, sensor_id int, sensor_value float, critical_flag int)  ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION 'wasb://cold-storage@[myStorage].blob.core.windows.net/data/';
+WITH t1 as (SELECT AVG(sensor_value) as avg_all FROM car_data WHERE sensor_id = '1' AND message_type = 'A' GROUP BY sensor_id) SELECT t2.vin, AVG(t2.sensor_value), t1.avg_all FROM car_data t2 JOIN t1 WHERE t2.sensor_id = '1' AND t2.message_type = 'A' GROUP BY t2.vin, t1.avg_all SORT BY t2.vin;
+
+######################################################################
+######################################################################
+#hive.ps1
+# First start Azure PowerShell, then run this script.
+# set the following variables
+$subscriptionName = "Windows Azure Internal Consumption"
+$clusterName = "hanzhdi"
+# You may or need to uncomment the following line to add AzureAccount
+    #Add-AzureAccount
+function RunHive($queryString)
+{
+    Use-AzureHDInsightCluster $clusterName
+    Write-Host($queryString)
+    $hiveJobDefinition = New-AzureHDInsightHiveJobDefinition -Query $queryString 
+    $hiveJob = Start-AzureHDInsightJob -Cluster $clusterName -JobDefinition $hiveJobDefinition
+    #Wait-AzureHDInsightJob -Job $hiveJob -WaitTimeoutInSeconds 3600
+    #Get-AzureHDInsightJobOutput -Cluster $clusterName -JobId $hiveJob.JobId -StandardOutput
+}
+function Query($queryString)
+{
+    Use-AzureHDInsightCluster $clusterName
+    Write-Host($queryString)
+    $response = Invoke-Hive -Query $queryString
+    Write-Host $response
+}
+Select-AzureSubscription $subscriptionName
+RunHive("DROP TABLE IF EXISTS avrotest;")
+RunHive("CREATE EXTERNAL TABLE avrotest ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.avro.AvroSerDe' STORED AS INPUTFORMAT 'org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat' OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat' LOCATION 'wasb://hanzhdi@hanzstorage.blob.core.windows.net/aaa/avrotest' TBLPROPERTIES ('avro.schema.url'='wasb://hanzhdi@hanzstorage.blob.core.windows.net/aaa_avrotest.avsc');")
+Query("Select * from avrotest;")
+######################################################################
+
+
